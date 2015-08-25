@@ -1,48 +1,23 @@
-/* 
-   In certificate full path:
-
-   - Remove the path. Leave out the filename
-   - Remove the .crt suffix
-   - Replace ',' and ' ' with '_'
-   - Replace '(' or ')' with '='
-   - Append .pem suffix in the end
- */
-
-
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
 #include <dirent.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <libgen.h>
+
 #include <sys/stat.h>
+#include <sys/sendfile.h>
+
+#define CERTSDIR "/usr/share/ca-certificates/"
+#define LOCALCERTSDIR "/usr/local/share/ca-certificates/"
+#define ETCCERTSDIR "/etc/ssl/certs/"
+#define CERTBUNDLE "ca-certificates.crt"
+#define CERTSCONF "/etc/ca-certificates.conf"
 
 typedef char* cstring;
-
 #define STRING(str) strndup(str, strlen(str))
-
-static cstring str_alloc(const char* init, int pad)
-{
-	int init_len = 0;
-	if (init)
-		init_len = strlen(init);
-
-	int size = init_len + pad;
-	cstring ret = (cstring) malloc(sizeof(cstring) * size);
-	memset(ret, 0, size);
-	if (init)
-		memcpy(ret, init, init_len);
-
-	return ret;
-}
-
-static bool str_begins(const cstring str, const cstring prefix)
-{
-	int size = strlen(prefix);
-	if (strlen(str) < size || !strlen(str) || !strlen(prefix))
-		return false;
-			
-	return !strncmp(str, prefix, size);
-}
 
 static bool str_replace(cstring str, const cstring oldstring, const cstring newstring)
 {
@@ -68,14 +43,35 @@ static bool str_replace(cstring str, const cstring oldstring, const cstring news
 	} else {
 		return false;
 	}
-	
-	/* Check if the rest of the string has any characters that hasn't been
-	 * converted
-	 */
+
 	if (!strstr(str, oldstring))
 		return true;
 
 	return str_replace(str, oldstring, newstring);
+}
+
+static cstring str_alloc(const cstring init, int pad)
+{
+	int init_len = 0;
+	if (init)
+		init_len = strlen(init);
+
+	int size = init_len + pad;
+	cstring ret = (cstring) malloc(sizeof(cstring) * size);
+	memset(ret, 0, size);
+	if (init)
+		memcpy(ret, init, init_len);
+
+	return ret;
+}
+
+static bool str_begins(const cstring str, const cstring prefix)
+{
+	int size = strlen(prefix);
+	if (strlen(str) < size || !strlen(str) || !strlen(prefix))
+		return false;
+
+	return !strncmp(str, prefix, size);
 }
 
 /* A string pair */
@@ -116,10 +112,11 @@ static struct pair* pair_alloc(int size)
 }
 
 static const cstring
-get_pair(struct pair* data, const cstring key)
+get_pair(struct pair* data, const cstring key, int* pos)
 {
 	int i = 0;
 	for (i = 0; i < data->size; i++) {
+		*pos = i;
 		if (data->second[i] && data->first[i]) {
 			if (str_begins(key, data->second[i]))
 				return data->first[i];
@@ -128,7 +125,7 @@ get_pair(struct pair* data, const cstring key)
 		}
 	}
 	
-	return "";
+	return 0;
 }
 
 static bool
@@ -144,66 +141,222 @@ add_ca_from_pem(struct pair* data, const cstring ca, const cstring pem)
 	return true;
 }
 
-static bool
-is_dir(const cstring path)
+int copyfile(const char* source, int output)
+{
+	int input;
+	if ((input = open(source, O_RDONLY)) == -1)
+		return -1;
+
+	off_t bytes = 0;
+	struct stat fileinfo = {0};
+	fstat(input, &fileinfo);
+	int result = sendfile(output, input, &bytes, fileinfo.st_size);
+
+	close(input);
+
+	return result;
+}
+
+typedef void (*proc_path)(const cstring, struct pair*, int);
+
+static void proc_localglobaldir(const cstring path, struct pair* d, int tmpfile_fd)
+{
+	/* basename() requires we duplicate the string */
+	const cstring base = STRING(path);
+	const cstring tmp_file = basename(base);
+	int base_len = strlen(tmp_file);
+	cstring actual_file = str_alloc("ca-cert-", base_len + 4);
+
+	if (base_len > 0) {
+		strncat(actual_file, tmp_file, base_len);
+		str_replace(actual_file, ".crt", "");
+		str_replace(actual_file, ",","_");
+		str_replace(actual_file, " ","_");
+		str_replace(actual_file, "(","=");
+		str_replace(actual_file, ")","=");
+		strncat(actual_file, ".pem", 4);
+		if (add_ca_from_pem(d, path, actual_file)) {
+			if (copyfile(path, tmpfile_fd) == -1)
+				printf("Cant copy %s\n", path);
+		} else {
+			printf("Warn! Cannot add: %s\n", path);
+		}
+	} else {
+		printf("Can't open path: %s\n", path);
+	}
+
+	free(base);
+	free(actual_file);
+}
+
+static void proc_etccertsdir(const cstring path, struct pair* d, int tmpfile_fd)
+{
+	struct stat statbuf;
+
+	if (lstat(path, &statbuf) == -1)
+		return;
+
+	cstring fullpath = str_alloc(0, statbuf.st_size + 1);
+	readlink(path, fullpath, statbuf.st_size + 1);
+
+	const cstring base = STRING(path);
+	const cstring actual_file = basename(base);
+	int pos = -1;
+	const cstring target = get_pair(d, actual_file, &pos);
+
+	if (!target) {
+		/* Symlink exists but is not wanted
+		 * Delete it if it points to 'our' directory
+		 */
+		if (str_begins(fullpath, CERTSDIR) || str_begins(fullpath, LOCALCERTSDIR))
+			remove(fullpath);
+	} else if (strncmp(fullpath, target, strlen(fullpath)) != 0) {
+		/* Symlink exists but points wrong */
+		if (symlink(target, path) == -1)
+			printf("Warning! Can't link %s -> %s\n", target, path);
+	} else {
+		/* Symlink exists and is ok */
+		memset(d->first[pos], 0, strlen(d->first[pos]));
+	}
+
+	free(base);
+	free(fullpath);
+}
+
+static bool file_readline(const cstring file, struct pair* d, int tmpfile_fd)
+{
+	FILE * fp = fopen(file, "r");
+	if (fp == NULL)
+		return false;
+
+	char * line = NULL;
+	size_t len = 0;
+	ssize_t read;
+
+	while ((read = getline(&line, &len, fp)) != -1) {
+		if (str_begins(line, "#") || str_begins(line, "!"))
+			continue;
+		str_replace(line, "\n", "");
+		const cstring fullpath = str_alloc(CERTSDIR, strlen(CERTSDIR) +
+						   strlen(line));
+		strncat(fullpath, line, strlen(line));
+		proc_localglobaldir(fullpath, d, tmpfile_fd);
+		free(fullpath);
+	}
+
+	fclose(fp);
+	if (line)
+		free(line);
+
+	return true;
+}
+
+typedef enum {
+	FILE_LINK,
+	FILE_REGULAR
+} filetype;
+
+static bool is_filetype(const cstring path, filetype file_check)
 {
 	struct stat statbuf;
 
 	if (lstat(path, &statbuf) < 0)
 		return false;
-	return S_ISDIR(statbuf.st_mode);
+	switch(file_check) {
+	case FILE_LINK: return S_ISLNK(statbuf.st_mode);
+	case FILE_REGULAR: return S_ISREG(statbuf.st_mode);
+	default: break;
+	}
+
+	return false;
 }
 
-bool
-_opendir(const cstring path, struct pair* d)
+static bool dir_readfiles(struct pair* d, const cstring path,
+			  filetype allowed_file_type,
+			  proc_path path_processor,
+			  int tmpfile_fd)
 {
 	DIR *dp = opendir(path);
 	if (!dp)
 		return false;
-
+ 
 	struct dirent *dirp;
 	while ((dirp = readdir(dp)) != NULL) {
 		if (str_begins(dirp->d_name, "."))
 			continue;
-		
+
 		int size = strlen(path) + strlen(dirp->d_name);
 		cstring fullpath = str_alloc(0, size);
 		strncat(fullpath, path, strlen(path));
 		strncat(fullpath, dirp->d_name, strlen(dirp->d_name));
-		
-		if (is_dir(fullpath))
-			continue;
 
-		cstring f = STRING(dirp->d_name);
-		str_replace(f, ".crt", "");
-		str_replace(f, ",","_");
-		str_replace(f, " ","_");
-		str_replace(f, "(","=");
-		str_replace(f, ")","=");
-		strncat(f, ".pem", 4);
-		if (!add_ca_from_pem(d, fullpath, f))
-			printf("Warn! Cannot add: %s\n", fullpath);
-		
-		free(f);
+		if (is_filetype(fullpath, allowed_file_type))
+			path_processor(fullpath, d, tmpfile_fd);
+
 		free(fullpath);
 	}
-	
+
 	return closedir(dp) == 0;
 }
 
-
 int main(int a, char **v)
 {
-	
-	/* Testing purposes */
 	struct pair* calinks = pair_alloc(256);
 
-	_opendir("/usr/share/ca-certificates/mozilla/", calinks);
-	printf("%s\n",
-	       get_pair(calinks, 
-			"/usr/share/ca-certificates/mozilla/DigiCert_High_Assurance_EV_Root_CA.crt"));
+	const cstring bundle = "bundleXXXXXX";
+	int etccertslen = strlen(ETCCERTSDIR);
+	cstring tmpfile = str_alloc(0, etccertslen + strlen(bundle));
+	strncat(tmpfile, ETCCERTSDIR, etccertslen);
+	strncat(tmpfile, bundle, strlen(bundle));
+
+	int fd = mkstemp(tmpfile);
+	if (fd == -1) {
+		printf("Failed to open temporary file %s for ca bundle\n", tmpfile);
+		exit(0);
+	}
+
+	/* Handle global CA certs from config file */
+	file_readline(CERTSCONF, calinks, fd);
+
+	/* Handle local CA certificates */
+	dir_readfiles(calinks, LOCALCERTSDIR, FILE_REGULAR, &proc_localglobaldir, fd);
+
+	/* Update etc cert dir for additions and deletions*/
+	dir_readfiles(calinks, ETCCERTSDIR, FILE_LINK, &proc_etccertsdir, fd);
+
+	int i = 0;
+	for (i = 0; i < calinks->count; i++) {
+		if (!strlen(calinks->first[i]))
+			continue;
+		int file_len = strlen(calinks->second[i]);
+		cstring newpath = str_alloc(ETCCERTSDIR,
+					    etccertslen + file_len);
+		strncat(newpath, calinks->second[i], file_len);
+		if (symlink(calinks->first[i], newpath) == -1)
+			printf("Warning! Can't link %s -> %s\n",
+			       calinks->first[i], newpath);
+		free(newpath);
+	}
+
+	/* Update hashes and the bundle */
+	if (fd != -1) {
+		close(fd);
+		cstring newcertname = str_alloc(ETCCERTSDIR, strlen(CERTBUNDLE));
+		strcat(newcertname, CERTBUNDLE);
+		rename(tmpfile, newcertname);
+		free(newcertname);
+	}
+
+	/* Execute c_rehash */
+	const cstring devnull = " > /dev/null";
+	const cstring c_rehash = str_alloc("c_rehash ", etccertslen + strlen(devnull));
+	strcat(c_rehash, ETCCERTSDIR);
+	strcat(c_rehash, devnull);
+	system(c_rehash);
 
 	pair_free(calinks);
+	free(tmpfile);
+	free(c_rehash);
 
 	return 0;
 }
