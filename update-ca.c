@@ -149,6 +149,7 @@ static void proc_localglobaldir(const cstring path, struct pair* d, int tmpfile_
 			case ')':
 			case '(':
 				*s = '=';
+				break;
 			default:
 				break;
 			}
