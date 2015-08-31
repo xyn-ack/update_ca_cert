@@ -19,37 +19,6 @@
 typedef char* cstring;
 #define STRING(str) strndup(str, strlen(str))
 
-static bool str_replace(cstring str, const cstring oldstring, const cstring newstring)
-{
-	const cstring p = strstr(str, oldstring);
-	int newstr_len = strlen(newstring);
-	int oldstr_len = strlen(oldstring);
-	int str_len = strlen(str);
-	if (!p || (newstr_len > str_len) || (oldstr_len > str_len))
-		return false;
-
-	int pos = p - str;
-	if (newstr_len == oldstr_len) {
-		memmove(p, newstring, newstr_len);
-	} else if (!newstr_len) {
-		int pos = p - str;
-		memmove(str, str, pos);
-		str[pos] = '\0';
-	} else if (newstr_len < strlen(oldstring)) {
-		int remaining_len = strlen(p + oldstr_len) + 1;
-		memmove(p, newstring, newstr_len);
-		memmove(p + newstr_len, p + oldstr_len, remaining_len);
-		str[pos + remaining_len] = '\0';		
-	} else {
-		return false;
-	}
-
-	if (!strstr(str, oldstring))
-		return true;
-
-	return str_replace(str, oldstring, newstring);
-}
-
 static cstring str_alloc(const cstring init, int pad)
 {
 	int init_len = 0;
@@ -169,11 +138,26 @@ static void proc_localglobaldir(const cstring path, struct pair* d, int tmpfile_
 
 	if (base_len > 0) {
 		strncat(actual_file, tmp_file, base_len);
-		str_replace(actual_file, ".crt", "");
-		str_replace(actual_file, ",","_");
-		str_replace(actual_file, " ","_");
-		str_replace(actual_file, "(","=");
-		str_replace(actual_file, ")","=");
+
+		char* s;
+		for (s = actual_file; *s != 0; s++) {
+			switch(*s) {
+			case ',':
+			case ' ':
+				*s = '_';
+				break;
+			case ')':
+			case '(':
+				*s = '=';
+			default:
+				break;
+			}
+		}
+		char* crt = strstr(actual_file, ".crt");
+		if (crt) {
+			actual_file[crt - actual_file] = '\0';
+		}
+
 		strncat(actual_file, ".pem", 4);
 		if (add_ca_from_pem(d, path, actual_file)) {
 			if (copyfile(path, tmpfile_fd) == -1)
@@ -236,7 +220,12 @@ static bool file_readline(const cstring file, struct pair* d, int tmpfile_fd)
 	while ((read = getline(&line, &len, fp)) != -1) {
 		if (str_begins(line, "#") || str_begins(line, "!"))
 			continue;
-		str_replace(line, "\n", "");
+
+		char* newline = strstr(line, "\n");
+		if (newline) {
+			line[newline - line] = '\0';
+		}
+
 		const cstring fullpath = str_alloc(CERTSDIR, strlen(CERTSDIR) +
 						   strlen(line));
 		strncat(fullpath, line, strlen(line));
