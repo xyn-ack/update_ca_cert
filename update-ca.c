@@ -67,10 +67,8 @@ static struct pair* pair_alloc(int size)
        struct pair* d = (struct pair*) malloc(sizeof(struct pair));
        d->size = size;
        d->count = 0;
-       d->first = (char* *) malloc(sizeof(char** ) * size);
-       memset(d->first, 0, sizeof(char**) * size);
-       d->second = (char* *) malloc(sizeof(char** ) * size);
-       memset(d->second, 0, sizeof(char**) * size);
+       d->first = calloc(size, sizeof(char** ));
+       d->second = calloc(size, sizeof(char** ));
        
        return d;
 }
