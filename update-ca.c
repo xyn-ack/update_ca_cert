@@ -16,17 +16,16 @@
 #define CERTBUNDLE "ca-certificates.crt"
 #define CERTSCONF "/etc/ca-certificates.conf"
 
-typedef char* cstring;
 #define STRING(str) strndup(str, strlen(str))
 
-static cstring str_alloc(const cstring init, int pad)
+static char* str_alloc(const char* init, int pad)
 {
 	int init_len = 0;
 	if (init)
 		init_len = strlen(init);
 
 	int size = init_len + pad;
-	cstring ret = (cstring) malloc(sizeof(cstring) * size);
+	char* ret = (char*) malloc(sizeof(char*) * size);
 	memset(ret, 0, size);
 	if (init)
 		memcpy(ret, init, init_len);
@@ -34,7 +33,7 @@ static cstring str_alloc(const cstring init, int pad)
 	return ret;
 }
 
-static bool str_begins(const cstring str, const cstring prefix)
+static bool str_begins(const char* str, const char* prefix)
 {
 	int size = strlen(prefix);
 	if (strlen(str) < size || !strlen(str) || !strlen(prefix))
@@ -46,8 +45,8 @@ static bool str_begins(const cstring str, const cstring prefix)
 /* A string pair */
 struct pair
 {
-	cstring* first;
-	cstring* second;
+	char** first;
+	char** second;
 
 	/* Total size */
 	unsigned size;
@@ -72,16 +71,16 @@ static struct pair* pair_alloc(int size)
        struct pair* d = (struct pair*) malloc(sizeof(struct pair));
        d->size = size;
        d->count = 0;
-       d->first = (cstring *) malloc(sizeof(cstring* ) * size);
-       memset(d->first, 0, sizeof(cstring*) * size);
-       d->second = (cstring *) malloc(sizeof(cstring* ) * size);
-       memset(d->second, 0, sizeof(cstring*) * size);
+       d->first = (char* *) malloc(sizeof(char** ) * size);
+       memset(d->first, 0, sizeof(char**) * size);
+       d->second = (char* *) malloc(sizeof(char** ) * size);
+       memset(d->second, 0, sizeof(char**) * size);
        
        return d;
 }
 
-static const cstring
-get_pair(struct pair* data, const cstring key, int* pos)
+static const char*
+get_pair(struct pair* data, const char* key, int* pos)
 {
 	int i = 0;
 	for (i = 0; i < data->size; i++) {
@@ -98,7 +97,7 @@ get_pair(struct pair* data, const cstring key, int* pos)
 }
 
 static bool
-add_ca_from_pem(struct pair* data, const cstring ca, const cstring pem)
+add_ca_from_pem(struct pair* data, const char* ca, const char* pem)
 {
  	int count = data->count++;
 	if (count >= data->size)
@@ -126,15 +125,15 @@ int copyfile(const char* source, int output)
 	return result;
 }
 
-typedef void (*proc_path)(const cstring, struct pair*, int);
+typedef void (*proc_path)(const char*, struct pair*, int);
 
-static void proc_localglobaldir(const cstring path, struct pair* d, int tmpfile_fd)
+static void proc_localglobaldir(const char* path, struct pair* d, int tmpfile_fd)
 {
 	/* basename() requires we duplicate the string */
-	const cstring base = STRING(path);
-	const cstring tmp_file = basename(base);
+	char* base = STRING(path);
+	const char* tmp_file = basename(base);
 	int base_len = strlen(tmp_file);
-	cstring actual_file = str_alloc("ca-cert-", base_len + 4);
+	char* actual_file = str_alloc("ca-cert-", base_len + 4);
 
 	if (base_len > 0) {
 		strncat(actual_file, tmp_file, base_len);
@@ -174,20 +173,20 @@ static void proc_localglobaldir(const cstring path, struct pair* d, int tmpfile_
 	free(actual_file);
 }
 
-static void proc_etccertsdir(const cstring path, struct pair* d, int tmpfile_fd)
+static void proc_etccertsdir(const char* path, struct pair* d, int tmpfile_fd)
 {
 	struct stat statbuf;
 
 	if (lstat(path, &statbuf) == -1)
 		return;
 
-	cstring fullpath = str_alloc(0, statbuf.st_size + 1);
+	char* fullpath = str_alloc(0, statbuf.st_size + 1);
 	readlink(path, fullpath, statbuf.st_size + 1);
 
-	const cstring base = STRING(path);
-	const cstring actual_file = basename(base);
+	char* base = STRING(path);
+	const char* actual_file = basename(base);
 	int pos = -1;
-	const cstring target = get_pair(d, actual_file, &pos);
+	const char* target = get_pair(d, actual_file, &pos);
 
 	if (!target) {
 		/* Symlink exists but is not wanted
@@ -208,7 +207,7 @@ static void proc_etccertsdir(const cstring path, struct pair* d, int tmpfile_fd)
 	free(fullpath);
 }
 
-static bool file_readline(const cstring file, struct pair* d, int tmpfile_fd)
+static bool file_readline(const char* file, struct pair* d, int tmpfile_fd)
 {
 	FILE * fp = fopen(file, "r");
 	if (fp == NULL)
@@ -227,7 +226,7 @@ static bool file_readline(const cstring file, struct pair* d, int tmpfile_fd)
 			line[newline - line] = '\0';
 		}
 
-		const cstring fullpath = str_alloc(CERTSDIR, strlen(CERTSDIR) +
+		char* fullpath = str_alloc(CERTSDIR, strlen(CERTSDIR) +
 						   strlen(line));
 		strncat(fullpath, line, strlen(line));
 		proc_localglobaldir(fullpath, d, tmpfile_fd);
@@ -246,7 +245,7 @@ typedef enum {
 	FILE_REGULAR
 } filetype;
 
-static bool is_filetype(const cstring path, filetype file_check)
+static bool is_filetype(const char* path, filetype file_check)
 {
 	struct stat statbuf;
 
@@ -261,7 +260,7 @@ static bool is_filetype(const cstring path, filetype file_check)
 	return false;
 }
 
-static bool dir_readfiles(struct pair* d, const cstring path,
+static bool dir_readfiles(struct pair* d, const char* path,
 			  filetype allowed_file_type,
 			  proc_path path_processor,
 			  int tmpfile_fd)
@@ -276,7 +275,7 @@ static bool dir_readfiles(struct pair* d, const cstring path,
 			continue;
 
 		int size = strlen(path) + strlen(dirp->d_name);
-		cstring fullpath = str_alloc(0, size);
+		char* fullpath = str_alloc(0, size);
 		strncat(fullpath, path, strlen(path));
 		strncat(fullpath, dirp->d_name, strlen(dirp->d_name));
 
@@ -293,9 +292,9 @@ int main(int a, char **v)
 {
 	struct pair* calinks = pair_alloc(256);
 
-	const cstring bundle = "bundleXXXXXX";
+	const char* bundle = "bundleXXXXXX";
 	int etccertslen = strlen(ETCCERTSDIR);
-	cstring tmpfile = str_alloc(0, etccertslen + strlen(bundle));
+	char* tmpfile = str_alloc(0, etccertslen + strlen(bundle));
 	strncat(tmpfile, ETCCERTSDIR, etccertslen);
 	strncat(tmpfile, bundle, strlen(bundle));
 
@@ -319,7 +318,7 @@ int main(int a, char **v)
 		if (!strlen(calinks->first[i]))
 			continue;
 		int file_len = strlen(calinks->second[i]);
-		cstring newpath = str_alloc(ETCCERTSDIR,
+		char* newpath = str_alloc(ETCCERTSDIR,
 					    etccertslen + file_len);
 		strncat(newpath, calinks->second[i], file_len);
 		if (symlink(calinks->first[i], newpath) == -1)
@@ -331,15 +330,15 @@ int main(int a, char **v)
 	/* Update hashes and the bundle */
 	if (fd != -1) {
 		close(fd);
-		cstring newcertname = str_alloc(ETCCERTSDIR, strlen(CERTBUNDLE));
+		char* newcertname = str_alloc(ETCCERTSDIR, strlen(CERTBUNDLE));
 		strcat(newcertname, CERTBUNDLE);
 		rename(tmpfile, newcertname);
 		free(newcertname);
 	}
 
 	/* Execute c_rehash */
-	const cstring devnull = " > /dev/null";
-	const cstring c_rehash = str_alloc("c_rehash ", etccertslen + strlen(devnull));
+	const char* devnull = " > /dev/null";
+	char* c_rehash = str_alloc("c_rehash ", etccertslen + strlen(devnull));
 	strcat(c_rehash, ETCCERTSDIR);
 	strcat(c_rehash, devnull);
 	system(c_rehash);
