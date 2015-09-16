@@ -16,7 +16,7 @@
 #define CERTBUNDLE "ca-certificates.crt"
 #define CERTSCONF "/etc/ca-certificates.conf"
 
-#define STRING(str) strndup(str, strlen(str))
+#define STRING(str) strdup(str, strlen(str))
 
 static char* str_alloc(const char* init, int pad)
 {
