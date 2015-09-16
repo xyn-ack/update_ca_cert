@@ -16,8 +16,6 @@
 #define CERTBUNDLE "ca-certificates.crt"
 #define CERTSCONF "/etc/ca-certificates.conf"
 
-#define STRING(str) strdup(str, strlen(str))
-
 static char* str_alloc(const char* init, int pad)
 {
 	int init_len = 0;
@@ -97,8 +95,8 @@ add_ca_from_pem(struct pair* data, const char* ca, const char* pem)
 	if (count >= data->size)
 		return false;
         
-	data->first[count] = STRING(ca);
-	data->second[count] = STRING(pem);
+	data->first[count] = strdup(ca);
+	data->second[count] = strdup(pem);
 
 	return true;
 }
@@ -125,7 +123,7 @@ typedef void (*proc_path)(const char*, struct pair*, int);
 static void proc_localglobaldir(const char* path, struct pair* d, int tmpfile_fd)
 {
 	/* basename() requires we duplicate the string */
-	char* base = STRING(path);
+	char* base = strdup(path);
 	const char* tmp_file = basename(base);
 	int base_len = strlen(tmp_file);
 	char* actual_file = str_alloc("ca-cert-", base_len + 4);
@@ -179,7 +177,7 @@ static void proc_etccertsdir(const char* path, struct pair* d, int tmpfile_fd)
 	if (readlink(path, fullpath, statbuf.st_size + 1) == -1)
 		return;
 
-	char* base = STRING(path);
+	char* base = strdup(path);
 	const char* actual_file = basename(base);
 	int pos = -1;
 	const char* target = get_pair(d, actual_file, &pos);
