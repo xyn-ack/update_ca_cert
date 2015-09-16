@@ -331,16 +331,19 @@ int main(int a, char **v)
 		free(newcertname);
 	}
 
-	/* Execute c_rehash */
-	const char* devnull = " > /dev/null";
-	char* c_rehash = str_alloc("c_rehash ", etccertslen + strlen(devnull));
-	strcat(c_rehash, ETCCERTSDIR);
-	strcat(c_rehash, devnull);
-	system(c_rehash);
-
 	pair_free(calinks);
 	free(tmpfile);
-	free(c_rehash);
+
+	/* Execute c_rehash */
+	int nullfd = open("/dev/null", O_WRONLY);
+	if (nullfd == -1)
+		return 0;
+
+	if (dup2(nullfd, STDOUT_FILENO) == -1)
+		return 0;
+
+	char* c_rehash_args[] = { "/usr/bin/c_rehash", ETCCERTSDIR, ">", "/dev/null", 0 };
+	execve(c_rehash_args[0], c_rehash_args, NULL);
 
 	return 0;
 }
