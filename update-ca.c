@@ -176,7 +176,8 @@ static void proc_etccertsdir(const char* path, struct pair* d, int tmpfile_fd)
 		return;
 
 	char* fullpath = str_alloc(0, statbuf.st_size + 1);
-	readlink(path, fullpath, statbuf.st_size + 1);
+	if (readlink(path, fullpath, statbuf.st_size + 1) == -1)
+		return;
 
 	char* base = STRING(path);
 	const char* actual_file = basename(base);
