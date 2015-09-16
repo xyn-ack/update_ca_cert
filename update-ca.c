@@ -103,7 +103,8 @@ add_ca_from_pem(struct pair* data, const char* ca, const char* pem)
 	return true;
 }
 
-int copyfile(const char* source, int output)
+static bool
+copyfile(const char* source, int output)
 {
 	int input;
 	if ((input = open(source, O_RDONLY)) == -1)
@@ -116,7 +117,7 @@ int copyfile(const char* source, int output)
 
 	close(input);
 
-	return result;
+	return (fileinfo.st_size == result);
 }
 
 typedef void (*proc_path)(const char*, struct pair*, int);
