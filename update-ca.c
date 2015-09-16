@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
@@ -15,21 +16,6 @@
 #define ETCCERTSDIR "/etc/ssl/certs/"
 #define CERTBUNDLE "ca-certificates.crt"
 #define CERTSCONF "/etc/ca-certificates.conf"
-
-static char* str_alloc(const char* init, int pad)
-{
-	int init_len = 0;
-	if (init)
-		init_len = strlen(init);
-
-	int size = init_len + pad;
-	char* ret = (char*) malloc(sizeof(char*) * size);
-	memset(ret, 0, size);
-	if (init)
-		memcpy(ret, init, init_len);
-
-	return ret;
-}
 
 static bool str_begins(const char* str, const char* prefix)
 {
@@ -124,13 +110,20 @@ static void proc_localglobaldir(const char* path, struct pair* d, int tmpfile_fd
 {
 	/* basename() requires we duplicate the string */
 	char* base = strdup(path);
-	const char* tmp_file = basename(base);
+	char* tmp_file = strdup(basename(base));
 	int base_len = strlen(tmp_file);
-	char* actual_file = str_alloc("ca-cert-", base_len + 4);
+	char* actual_file = 0;
 
-	if (base_len > 0) {
-		strncat(actual_file, tmp_file, base_len);
+	/* Snip off the .crt suffix*/
+	char* crt = strstr(tmp_file, ".crt");
+	if (crt) {
+		tmp_file[crt - tmp_file] = '\0';
+	}
 
+	bool build_string = asprintf(&actual_file, "%s%s%s", "ca-cert-",
+				     tmp_file, ".pem") != -1;
+
+	if (base_len > 0 && build_string) {
 		char* s;
 		for (s = actual_file; *s != 0; s++) {
 			switch(*s) {
@@ -146,12 +139,7 @@ static void proc_localglobaldir(const char* path, struct pair* d, int tmpfile_fd
 				break;
 			}
 		}
-		char* crt = strstr(actual_file, ".crt");
-		if (crt) {
-			actual_file[crt - actual_file] = '\0';
-		}
 
-		strncat(actual_file, ".pem", 4);
 		if (add_ca_from_pem(d, path, actual_file)) {
 			if (copyfile(path, tmpfile_fd) == -1)
 				printf("Cant copy %s\n", path);
@@ -164,6 +152,7 @@ static void proc_localglobaldir(const char* path, struct pair* d, int tmpfile_fd
 
 	free(base);
 	free(actual_file);
+	free(tmp_file);
 }
 
 static void proc_etccertsdir(const char* path, struct pair* d, int tmpfile_fd)
@@ -173,7 +162,7 @@ static void proc_etccertsdir(const char* path, struct pair* d, int tmpfile_fd)
 	if (lstat(path, &statbuf) == -1)
 		return;
 
-	char* fullpath = str_alloc(0, statbuf.st_size + 1);
+	char* fullpath = (char*) malloc(sizeof(char*) *  statbuf.st_size + 1);
 	if (readlink(path, fullpath, statbuf.st_size + 1) == -1)
 		return;
 
@@ -220,11 +209,11 @@ static bool file_readline(const char* file, struct pair* d, int tmpfile_fd)
 			line[newline - line] = '\0';
 		}
 
-		char* fullpath = str_alloc(CERTSDIR, strlen(CERTSDIR) +
-						   strlen(line));
-		strncat(fullpath, line, strlen(line));
-		proc_localglobaldir(fullpath, d, tmpfile_fd);
-		free(fullpath);
+		char* fullpath = 0;
+		if (asprintf(&fullpath,"%s%s", CERTSDIR, line) != -1) {
+			proc_localglobaldir(fullpath, d, tmpfile_fd);
+			free(fullpath);
+		}
 	}
 
 	fclose(fp);
@@ -269,14 +258,13 @@ static bool dir_readfiles(struct pair* d, const char* path,
 			continue;
 
 		int size = strlen(path) + strlen(dirp->d_name);
-		char* fullpath = str_alloc(0, size);
-		strncat(fullpath, path, strlen(path));
-		strncat(fullpath, dirp->d_name, strlen(dirp->d_name));
+		char* fullpath = 0;
+		if (asprintf(&fullpath, "%s%s", path, dirp->d_name) != -1) {
+			if (is_filetype(fullpath, allowed_file_type))
+				path_processor(fullpath, d, tmpfile_fd);
 
-		if (is_filetype(fullpath, allowed_file_type))
-			path_processor(fullpath, d, tmpfile_fd);
-
-		free(fullpath);
+			free(fullpath);
+		}
 	}
 
 	return closedir(dp) == 0;
@@ -288,9 +276,9 @@ int main(int a, char **v)
 
 	const char* bundle = "bundleXXXXXX";
 	int etccertslen = strlen(ETCCERTSDIR);
-	char* tmpfile = str_alloc(0, etccertslen + strlen(bundle));
-	strncat(tmpfile, ETCCERTSDIR, etccertslen);
-	strncat(tmpfile, bundle, strlen(bundle));
+	char* tmpfile = 0;
+	if (asprintf(&tmpfile, "%s%s", ETCCERTSDIR, bundle) == -1)
+		return 0;
 
 	int fd = mkstemp(tmpfile);
 	if (fd == -1) {
@@ -312,10 +300,10 @@ int main(int a, char **v)
 		if (!strlen(calinks->first[i]))
 			continue;
 		int file_len = strlen(calinks->second[i]);
-		char* newpath = str_alloc(ETCCERTSDIR,
-					    etccertslen + file_len);
-		strncat(newpath, calinks->second[i], file_len);
-		if (symlink(calinks->first[i], newpath) == -1)
+		char* newpath = 0;
+		bool build_str = asprintf(&newpath, "%s%s", ETCCERTSDIR,
+					 calinks->second[i]) != -1;
+		if (!build_str || symlink(calinks->first[i], newpath) == -1)
 			printf("Warning! Can't link %s -> %s\n",
 			       calinks->first[i], newpath);
 		free(newpath);
@@ -324,10 +312,11 @@ int main(int a, char **v)
 	/* Update hashes and the bundle */
 	if (fd != -1) {
 		close(fd);
-		char* newcertname = str_alloc(ETCCERTSDIR, strlen(CERTBUNDLE));
-		strcat(newcertname, CERTBUNDLE);
-		rename(tmpfile, newcertname);
-		free(newcertname);
+		char* newcertname = 0;
+		if (asprintf(&newcertname, "%s%s", ETCCERTSDIR, CERTBUNDLE) != -1) {
+			rename(tmpfile, newcertname);
+			free(newcertname);
+		}
 	}
 
 	pair_free(calinks);
