@@ -35,11 +35,7 @@ static char* str_alloc(const char* init, int pad)
 
 static bool str_begins(const char* str, const char* prefix)
 {
-	int size = strlen(prefix);
-	if (strlen(str) < size || !strlen(str) || !strlen(prefix))
-		return false;
-
-	return !strncmp(str, prefix, size);
+	return !strncmp(str, prefix, strlen(prefix));
 }
 
 /* A string pair */
