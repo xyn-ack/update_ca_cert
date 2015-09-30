@@ -17,6 +17,8 @@
 #define CERTBUNDLE "ca-certificates.crt"
 #define CERTSCONF "/etc/ca-certificates.conf"
 
+#define SOMEVAR
+
 static bool str_begins(const char* str, const char* prefix)
 {
 	return !strncmp(str, prefix, strlen(prefix));
