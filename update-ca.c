@@ -115,10 +115,8 @@ static void proc_localglobaldir(const char* path, struct pair* d, int tmpfile_fd
 	char* actual_file = 0;
 
 	/* Snip off the .crt suffix*/
-	char* crt = strstr(tmp_file, ".crt");
-	if (crt) {
-		tmp_file[crt - tmp_file] = '\0';
-	}
+	if (base_len > 4 && strcmp(&tmp_file[base_len - 4], ".crt") == 0)
+		tmp_file[base_len - 4] = 0;
 
 	bool build_string = asprintf(&actual_file, "%s%s%s", "ca-cert-",
 				     tmp_file, ".pem") != -1;
