@@ -7,6 +7,10 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#ifndef SYMLINK_MAX
+#define SYMLINK_MAX PATH_MAX
+#endif
+
 #include <sys/stat.h>
 #include <sys/sendfile.h>
 
